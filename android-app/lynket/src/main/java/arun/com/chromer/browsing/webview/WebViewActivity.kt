@@ -24,18 +24,12 @@ import android.annotation.SuppressLint
 import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.drawable.ColorDrawable
-import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import android.text.TextUtils
-import android.view.Gravity
 import android.view.InflateException
-import android.view.ViewGroup
-import android.view.WindowManager
 import android.view.Menu
 import android.view.MenuItem
-import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.widget.Toast
@@ -64,14 +58,6 @@ open class WebViewActivity : BrowsingActivity() {
   private var themeColor = 0
   private var fgColorStateList: ColorStateList = ColorStateList.valueOf(0)
   private var foregroundColor = 0
-
-  // Keep the live page attached to a tiny overlay while this Activity is backgrounded. Unlike a
-  // second hidden WebView, this preserves the exact DOM/JS/WebSocket session the user is viewing.
-  private var backgroundOverlayManager: WindowManager? = null
-  private var originalWebViewParent: ViewGroup? = null
-  private var originalWebViewIndex = -1
-  private var originalWebViewLayoutParams: ViewGroup.LayoutParams? = null
-  private var webViewAttachedToBackgroundOverlay = false
 
   // RAS-58: intercepts external-app links (non http(s) schemes / intent://) with a
   // confirmation dialog. Also covers EmbeddableWebViewActivity (bubbles) via inheritance.
@@ -107,112 +93,9 @@ open class WebViewActivity : BrowsingActivity() {
     menuDelegate.setupBottombar(bottomNavigation)
   }
 
-  override fun onStart() {
-    super.onStart()
-    restoreWebViewFromBackgroundOverlay()
-  }
-
-  override fun onStop() {
-    if (!isFinishing && !isChangingConfigurations) {
-      attachWebViewToBackgroundOverlay()
-    }
-    super.onStop()
-  }
-
   override fun onDestroy() {
-    detachWebViewFromBackgroundOverlay()
     webView.destroy()
     super.onDestroy()
-  }
-
-  private fun attachWebViewToBackgroundOverlay() {
-    if (webViewAttachedToBackgroundOverlay || !Settings.canDrawOverlays(this)) return
-    val parent = webView.parent as? ViewGroup ?: return
-    try {
-      originalWebViewParent = parent
-      originalWebViewIndex = parent.indexOfChild(webView)
-      originalWebViewLayoutParams = webView.layoutParams
-      parent.removeView(webView)
-
-      val manager = applicationContext.getSystemService(WINDOW_SERVICE) as WindowManager
-      val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-      } else {
-        @Suppress("DEPRECATION")
-        WindowManager.LayoutParams.TYPE_PHONE
-      }
-      val params = WindowManager.LayoutParams(
-        1,
-        1,
-        type,
-        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-          WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-          WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-        PixelFormat.TRANSLUCENT
-      ).apply {
-        gravity = Gravity.TOP or Gravity.START
-        x = 0
-        y = 0
-        alpha = 0.01f
-      }
-      manager.addView(webView, params)
-      backgroundOverlayManager = manager
-      webViewAttachedToBackgroundOverlay = true
-      webView.onResume()
-      Timber.d("Moved live WebView into 1x1 background keep-alive overlay")
-    } catch (error: Exception) {
-      Timber.e(error, "Failed to attach live WebView to background overlay")
-      restoreWebViewAfterAttachFailure()
-    }
-  }
-
-  private fun restoreWebViewFromBackgroundOverlay() {
-    if (!webViewAttachedToBackgroundOverlay) return
-    val parent = originalWebViewParent ?: return
-    try {
-      backgroundOverlayManager?.removeView(webView)
-      webViewAttachedToBackgroundOverlay = false
-      val params = originalWebViewLayoutParams
-      val index = originalWebViewIndex.coerceIn(0, parent.childCount)
-      if (params != null) {
-        parent.addView(webView, index, params)
-      } else {
-        parent.addView(webView, index)
-      }
-      webView.onResume()
-      Timber.d("Restored live WebView from background keep-alive overlay")
-    } catch (error: Exception) {
-      Timber.e(error, "Failed to restore live WebView from background overlay")
-    } finally {
-      backgroundOverlayManager = null
-    }
-  }
-
-  private fun detachWebViewFromBackgroundOverlay() {
-    if (!webViewAttachedToBackgroundOverlay) return
-    try {
-      backgroundOverlayManager?.removeView(webView)
-    } catch (error: Exception) {
-      Timber.e(error, "Failed to detach WebView from background overlay")
-    } finally {
-      webViewAttachedToBackgroundOverlay = false
-      backgroundOverlayManager = null
-    }
-  }
-
-  private fun restoreWebViewAfterAttachFailure() {
-    val parent = originalWebViewParent ?: return
-    if (webView.parent == null) {
-      val params = originalWebViewLayoutParams
-      val index = originalWebViewIndex.coerceIn(0, parent.childCount)
-      if (params != null) {
-        parent.addView(webView, index, params)
-      } else {
-        parent.addView(webView, index)
-      }
-    }
-    webViewAttachedToBackgroundOverlay = false
-    backgroundOverlayManager = null
   }
 
   override fun onBackPressed() {
@@ -279,32 +162,6 @@ open class WebViewActivity : BrowsingActivity() {
             super.onPageFinished(view, url)
             hideLoading()
           }
-
-          override fun onRenderProcessGone(
-            view: WebView?,
-            detail: RenderProcessGoneDetail?
-          ): Boolean {
-            val didCrash = detail?.didCrash() == true
-            Timber.e(
-              "WebView renderer terminated; didCrash=%s, priority=%s, url=%s",
-              didCrash,
-              detail?.rendererPriorityAtExit(),
-              view?.url
-            )
-
-            // WebView's renderer is a separate process. If this callback returns false Android
-            // terminates the host app as well. Consume the renderer death here and recreate this
-            // Activity with a fresh WebView instead of crashing Lynket.
-            val deadView = view
-            (deadView?.parent as? ViewGroup)?.removeView(deadView)
-            deadView?.destroy()
-            window.decorView.post {
-              if (!isFinishing && !isDestroyed) {
-                recreate()
-              }
-            }
-            return true
-          }
         }
         webChromeClient = object : WebChromeClient() {
           override fun onReceivedTitle(view: WebView?, title: String?) {
@@ -357,8 +214,8 @@ open class WebViewActivity : BrowsingActivity() {
       setTitleTextColor(foregroundColor)
       setSubtitleTextColor(foregroundColor)
       post {
-        navigationIcon = navigationIcon?.applyColor(foregroundColor)
-        overflowIcon = overflowIcon?.applyColor(foregroundColor)
+        navigationIcon = navigationIcon!!.applyColor(foregroundColor)
+        overflowIcon = overflowIcon!!.applyColor(foregroundColor)
       }
     }
 

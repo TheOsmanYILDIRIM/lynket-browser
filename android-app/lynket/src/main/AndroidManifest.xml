@@ -22,7 +22,6 @@
   package="arun.com.chromer">
 
   <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-  <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
   <uses-permission android:name="com.android.vending.BILLING" />
   <uses-permission android:name="com.android.launcher.permission.INSTALL_SHORTCUT" />
   <uses-permission android:name="android.permission.INTERNET" />
@@ -32,7 +31,6 @@
   <uses-permission android:name="android.permission.GET_TASKS" />
   <uses-permission android:name="android.permission.REORDER_TASKS" />
   <uses-permission android:name="android.permission.WAKE_LOCK" />
-  <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
   <uses-permission
     android:name="android.permission.PACKAGE_USAGE_STATS"
     tools:ignore="ProtectedPermissions" />
@@ -125,6 +123,18 @@
         android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
         android:value="Floating overlay web bubbles (SYSTEM_ALERT_WINDOW) to keep tabs accessible" />
     </service>
+    <service
+      android:name=".browsing.floating.FloatingBrowserService"
+      android:enabled="true"
+      android:exported="false"
+      android:foregroundServiceType="@integer/foreground_service_type_special_use"
+      tools:targetApi="34"
+      tools:ignore="UnusedAttribute">
+      <property
+        android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+        android:value="Resizable floating browser window kept visible above other apps" />
+    </service>
+
     <service
       android:name=".browsing.customtabs.KeepAliveService"
       android:enabled="true"
