@@ -4,7 +4,7 @@ name: Build APK
 # (dev.arunkumar.android:*) 从源码 publishToMavenLocal 复活，再编译出可安装的
 # debug APK 并作为 artifact 上传。release 正式签名包在后续 release.yml 中处理。
 #
-# Validate the full packaging pipeline on build/apk: resurrect the upstream
+# Main is the canonical custom build branch; every push should validate the installable APK.\n# Validate the full packaging pipeline on build/apk: resurrect the upstream
 # base-android private deps (dev.arunkumar.android:*) via publishToMavenLocal,
 # then assemble an installable debug APK and upload it as an artifact.
 
