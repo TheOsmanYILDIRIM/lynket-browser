@@ -341,6 +341,13 @@ constructor(
   }
 
   override fun shouldUseWebView(incognito: Boolean): Boolean {
+    // Persistent/background browsing must stay inside Lynket's own process. A Custom Tab is
+    // rendered by the selected external browser (usually Chrome), so Lynket's foreground service,
+    // wake lock and overlay cannot keep that renderer/socket alive when Lynket is backgrounded.
+    // Web-head/native-bubble modes therefore always use the in-process WebView.
+    if (preferences.webHeads() || rxPreferences.nativeBubbles.get()) {
+      return true
+    }
     val canSafelyOpenCCT =
       !preferences.useWebView() && CustomTabs.getCustomTabSupportingPackages(application)
         .isNotEmpty()
