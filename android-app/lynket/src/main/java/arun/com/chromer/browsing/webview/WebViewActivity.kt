@@ -24,6 +24,7 @@ import android.annotation.SuppressLint
 import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.drawable.ColorDrawable
+import android.os.Build
 import android.os.Bundle
 import android.text.TextUtils
 import android.view.InflateException
@@ -145,6 +146,9 @@ open class WebViewActivity : BrowsingActivity() {
   private fun setupWebView(savedInstanceState: Bundle?) {
     try {
       webView.apply {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+          setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+        }
         webViewClient = object : ExternalAppInterceptingWebViewClient(externalAppLaunchHandler) {
           override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
             super.onPageStarted(view, url, favicon)

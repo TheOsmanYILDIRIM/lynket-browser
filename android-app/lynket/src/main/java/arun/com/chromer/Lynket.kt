@@ -44,6 +44,7 @@ open class Lynket : Application() {
 
   override fun onCreate() {
     super.onCreate()
+    AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
     Paper.init(this)
 
     if (BuildConfig.DEBUG) {
