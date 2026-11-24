@@ -53,6 +53,15 @@ abstract class OverlayService : BaseService() {
     startForeground(getNotificationId(), getNotification())
   }
 
+  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    if (!Utils.isOverlayGranted(this)) {
+      stopSelf(startId)
+      return START_NOT_STICKY
+    }
+    updateNotification(getNotification())
+    return START_STICKY
+  }
+
   protected fun stopService() {
     Timber.d("Stopping service.")
     ServiceManager.restartAppDetectionService(this) // Temp hack for Oreo.

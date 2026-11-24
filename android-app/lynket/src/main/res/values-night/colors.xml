@@ -24,4 +24,9 @@
   <color name="article_primaryText">#FFFFFFFF</color>
   <color name="article_secondaryText">#B2FFFFFF</color>
   <color name="article_codeblockBackground">#424242</color>
+  <color name="card_background_light">#1E1E1E</color>
+  <color name="primary_text_color">#F2F2F2</color>
+  <color name="secondary_text_color">#B3B3B3</color>
+  <color name="material_grey_color">#B0B0B0</color>
+  <color name="accent_icon_no_focus">#BDBDBD</color>
 </resources>

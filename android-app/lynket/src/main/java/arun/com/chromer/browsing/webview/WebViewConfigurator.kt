@@ -45,5 +45,6 @@ object WebViewConfigurator {
   fun configure(settings: WebSettings) {
     settings.javaScriptEnabled = true
     settings.domStorageEnabled = true
+    settings.offscreenPreRaster = true
   }
 }
