@@ -105,29 +105,39 @@ abstract class OverlayService : BaseService() {
 
   private fun acquireWakeLock() {
     if (keepAliveWakeLock?.isHeld == true) return
-    val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-    keepAliveWakeLock = powerManager.newWakeLock(
-      PowerManager.PARTIAL_WAKE_LOCK,
-      "${packageName}:webheads-keepalive"
-    ).apply {
-      setReferenceCounted(false)
-      acquire()
+    try {
+      val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+      keepAliveWakeLock = powerManager.newWakeLock(
+        PowerManager.PARTIAL_WAKE_LOCK,
+        "${packageName}:webheads-keepalive"
+      ).apply {
+        setReferenceCounted(false)
+        acquire()
+      }
+      Timber.d("Web heads keep-alive wake lock acquired")
+    } catch (error: Exception) {
+      keepAliveWakeLock = null
+      Timber.e(error, "Unable to acquire Web Heads wake lock")
     }
-    Timber.d("Web heads keep-alive wake lock acquired")
   }
 
   @Suppress("DEPRECATION")
   private fun acquireWifiLock() {
     if (keepAliveWifiLock?.isHeld == true) return
-    val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-    keepAliveWifiLock = wifiManager.createWifiLock(
-      WifiManager.WIFI_MODE_FULL_HIGH_PERF,
-      "${packageName}:webheads-wifi"
-    ).apply {
-      setReferenceCounted(false)
-      acquire()
+    try {
+      val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+      keepAliveWifiLock = wifiManager.createWifiLock(
+        WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+        "${packageName}:webheads-wifi"
+      ).apply {
+        setReferenceCounted(false)
+        acquire()
+      }
+      Timber.d("Web heads keep-alive Wi-Fi lock acquired")
+    } catch (error: Exception) {
+      keepAliveWifiLock = null
+      Timber.e(error, "Unable to acquire Web Heads Wi-Fi lock")
     }
-    Timber.d("Web heads keep-alive Wi-Fi lock acquired")
   }
 
   private fun acquireInvisibleOverlay() {
