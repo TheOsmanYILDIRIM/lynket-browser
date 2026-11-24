@@ -265,9 +265,12 @@ public class WebHeadService extends OverlayService implements WebHeadContract,
 
   @Override
   public int onStartCommand(Intent intent, int flags, int startId) {
-    checkForOverlayPermission();
+    final int startMode = super.onStartCommand(intent, flags, startId);
+    if (startMode == START_NOT_STICKY) {
+      return startMode;
+    }
     processIntent(intent);
-    return START_STICKY;
+    return startMode;
   }
 
   private void processIntent(@Nullable Intent intent) {

@@ -24,9 +24,17 @@ import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.PixelFormat
 import android.net.Uri
+import android.net.wifi.WifiManager
+import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.provider.Settings
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
 import android.widget.Toast
 import android.widget.Toast.LENGTH_LONG
 import androidx.annotation.IntRange
@@ -40,6 +48,11 @@ import timber.log.Timber
  * Created by Arunkumar on 24-02-2017.
  */
 abstract class OverlayService : BaseService() {
+  private var keepAliveWakeLock: PowerManager.WakeLock? = null
+  private var keepAliveWifiLock: WifiManager.WifiLock? = null
+  private var keepAliveOverlay: View? = null
+  private var windowManager: WindowManager? = null
+
   @IntRange(from = 1)
   abstract fun getNotificationId(): Int
 
@@ -51,6 +64,14 @@ abstract class OverlayService : BaseService() {
     super.onCreate()
     checkForOverlayPermission()
     startForeground(getNotificationId(), getNotification())
+    if (Utils.isOverlayGranted(this)) {
+      startKeepAliveProtection()
+    }
+  }
+
+  override fun onDestroy() {
+    stopKeepAliveProtection()
+    super.onDestroy()
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -58,8 +79,118 @@ abstract class OverlayService : BaseService() {
       stopSelf(startId)
       return START_NOT_STICKY
     }
+    startKeepAliveProtection()
     updateNotification(getNotification())
     return START_STICKY
+  }
+
+  private fun startKeepAliveProtection() {
+    acquireWakeLock()
+    acquireWifiLock()
+    acquireInvisibleOverlay()
+    requestBatteryOptimizationExemption()
+  }
+
+  private fun stopKeepAliveProtection() {
+    releaseInvisibleOverlay()
+    keepAliveWifiLock?.let { lock ->
+      if (lock.isHeld) lock.release()
+    }
+    keepAliveWifiLock = null
+    keepAliveWakeLock?.let { lock ->
+      if (lock.isHeld) lock.release()
+    }
+    keepAliveWakeLock = null
+  }
+
+  private fun acquireWakeLock() {
+    if (keepAliveWakeLock?.isHeld == true) return
+    val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+    keepAliveWakeLock = powerManager.newWakeLock(
+      PowerManager.PARTIAL_WAKE_LOCK,
+      "${packageName}:webheads-keepalive"
+    ).apply {
+      setReferenceCounted(false)
+      acquire()
+    }
+    Timber.d("Web heads keep-alive wake lock acquired")
+  }
+
+  @Suppress("DEPRECATION")
+  private fun acquireWifiLock() {
+    if (keepAliveWifiLock?.isHeld == true) return
+    val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+    keepAliveWifiLock = wifiManager.createWifiLock(
+      WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+      "${packageName}:webheads-wifi"
+    ).apply {
+      setReferenceCounted(false)
+      acquire()
+    }
+    Timber.d("Web heads keep-alive Wi-Fi lock acquired")
+  }
+
+  private fun acquireInvisibleOverlay() {
+    if (keepAliveOverlay != null || !Utils.isOverlayGranted(this)) return
+    try {
+      val manager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+      val overlay = View(this).apply {
+        setBackgroundColor(Color.TRANSPARENT)
+      }
+      val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+      } else {
+        @Suppress("DEPRECATION")
+        WindowManager.LayoutParams.TYPE_PHONE
+      }
+      val params = WindowManager.LayoutParams(
+        1,
+        1,
+        layoutType,
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+          WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+          WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+        PixelFormat.TRANSLUCENT
+      ).apply {
+        gravity = Gravity.TOP or Gravity.START
+        x = 0
+        y = 0
+      }
+      manager.addView(overlay, params)
+      windowManager = manager
+      keepAliveOverlay = overlay
+      Timber.d("Invisible 1x1 keep-alive overlay attached")
+    } catch (error: Exception) {
+      Timber.e(error, "Unable to attach invisible keep-alive overlay")
+    }
+  }
+
+  private fun releaseInvisibleOverlay() {
+    val overlay = keepAliveOverlay ?: return
+    try {
+      windowManager?.removeView(overlay)
+    } catch (error: Exception) {
+      Timber.e(error, "Unable to remove invisible keep-alive overlay")
+    } finally {
+      keepAliveOverlay = null
+      windowManager = null
+    }
+  }
+
+  private fun requestBatteryOptimizationExemption() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+    val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+    if (powerManager.isIgnoringBatteryOptimizations(packageName)) return
+    try {
+      startActivity(
+        Intent(
+          Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+          Uri.parse("package:$packageName")
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      )
+    } catch (error: Exception) {
+      Timber.e(error, "Unable to request battery optimization exemption")
+    }
   }
 
   protected fun stopService() {
