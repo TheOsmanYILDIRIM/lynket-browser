@@ -35,6 +35,7 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.Menu
 import android.view.MenuItem
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.widget.Toast
@@ -278,6 +279,32 @@ open class WebViewActivity : BrowsingActivity() {
             super.onPageFinished(view, url)
             hideLoading()
           }
+
+          override fun onRenderProcessGone(
+            view: WebView?,
+            detail: RenderProcessGoneDetail?
+          ): Boolean {
+            val didCrash = detail?.didCrash() == true
+            Timber.e(
+              "WebView renderer terminated; didCrash=%s, priority=%s, url=%s",
+              didCrash,
+              detail?.rendererPriorityAtExit(),
+              view?.url
+            )
+
+            // WebView's renderer is a separate process. If this callback returns false Android
+            // terminates the host app as well. Consume the renderer death here and recreate this
+            // Activity with a fresh WebView instead of crashing Lynket.
+            val deadView = view
+            (deadView?.parent as? ViewGroup)?.removeView(deadView)
+            deadView?.destroy()
+            window.decorView.post {
+              if (!isFinishing && !isDestroyed) {
+                recreate()
+              }
+            }
+            return true
+          }
         }
         webChromeClient = object : WebChromeClient() {
           override fun onReceivedTitle(view: WebView?, title: String?) {
@@ -330,8 +357,8 @@ open class WebViewActivity : BrowsingActivity() {
       setTitleTextColor(foregroundColor)
       setSubtitleTextColor(foregroundColor)
       post {
-        navigationIcon = navigationIcon!!.applyColor(foregroundColor)
-        overflowIcon = overflowIcon!!.applyColor(foregroundColor)
+        navigationIcon = navigationIcon?.applyColor(foregroundColor)
+        overflowIcon = overflowIcon?.applyColor(foregroundColor)
       }
     }
 
