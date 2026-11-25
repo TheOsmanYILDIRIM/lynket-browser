@@ -11,6 +11,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.net.Uri
@@ -18,9 +19,11 @@ import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
@@ -67,6 +70,15 @@ class FloatingBrowserService : Service() {
   private val windows = LinkedHashMap<Long, FloatingWindow>()
   private val prefs by lazy { getSharedPreferences(PREFS, Context.MODE_PRIVATE) }
   private val density by lazy { resources.displayMetrics.density }
+  private val defaultPreferences by lazy {
+    Preferences.get(this).getDefaultSharedPreferences()
+  }
+  private val preferenceListener =
+    SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+      if (key == Preferences.FLOATING_BROWSER_ZOOM) {
+        windows.values.forEach { applyConfiguredZoom(it.webView, injectCss = true) }
+      }
+    }
 
   override fun onBind(intent: Intent?): IBinder? = null
 
@@ -74,6 +86,7 @@ class FloatingBrowserService : Service() {
     super.onCreate()
     startForeground(NOTIFICATION_ID, buildNotification())
     windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    defaultPreferences.registerOnSharedPreferenceChangeListener(preferenceListener)
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
       try {
@@ -106,6 +119,7 @@ class FloatingBrowserService : Service() {
   }
 
   override fun onDestroy() {
+    defaultPreferences.unregisterOnSharedPreferenceChangeListener(preferenceListener)
     windows.values.toList().forEach { destroyWindow(it, stopWhenEmpty = false) }
     windows.clear()
     super.onDestroy()
@@ -179,6 +193,7 @@ class FloatingBrowserService : Service() {
       height,
       type,
       WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+        WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
         WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
       PixelFormat.RGBA_8888
     ).apply {
@@ -294,6 +309,8 @@ class FloatingBrowserService : Service() {
     session = createdSession
     installDragHandler(createdSession, title)
     installResizeHandler(createdSession, resizeHint, minWidth, minHeight)
+    installExpandedInteraction(createdSession)
+    installOutsideFocusRelease(createdSession)
 
     try {
       windowManager.addView(container, params)
@@ -318,11 +335,10 @@ class FloatingBrowserService : Service() {
       settings.mediaPlaybackRequiresUserGesture = false
       settings.useWideViewPort = true
       settings.loadWithOverviewMode = false
-      setInitialScale(
-        Preferences.get(this@FloatingBrowserService)
-          .floatingBrowserZoomPercent()
-          .coerceIn(50, 100)
-      )
+      settings.setSupportZoom(true)
+      settings.builtInZoomControls = true
+      settings.displayZoomControls = false
+      applyConfiguredZoom(this, injectCss = false)
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
       }
@@ -345,6 +361,7 @@ class FloatingBrowserService : Service() {
 
         override fun onPageFinished(view: WebView?, url: String?) {
           super.onPageFinished(view, url)
+          view?.let { applyConfiguredZoom(it, injectCss = true) }
           url?.let { finished ->
             windows.values.firstOrNull { it.webView === view }?.currentUrl = finished
           }
@@ -370,6 +387,77 @@ class FloatingBrowserService : Service() {
           onTitle(title)
         }
       }
+    }
+  }
+
+  private fun applyConfiguredZoom(webView: WebView, injectCss: Boolean) {
+    val percent = Preferences.get(this)
+      .floatingBrowserZoomPercent()
+      .coerceIn(50, 100)
+
+    // setInitialScale alone is commonly overridden by a page's viewport meta tag.
+    // Keep it as an initial hint, then enforce a true whole-page Chromium CSS zoom
+    // after load. This scales text, controls and layout together instead of text only.
+    webView.setInitialScale(percent)
+    if (injectCss) {
+      webView.evaluateJavascript(
+        "(function(){var e=document.documentElement;if(e){e.style.zoom='" +
+          percent + "%';}})();",
+        null
+      )
+    }
+  }
+
+  @SuppressLint("ClickableViewAccessibility")
+  private fun installExpandedInteraction(session: FloatingWindow) {
+    session.webView.setOnTouchListener { _, event ->
+      if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+        setWindowFocusable(session, true)
+      }
+      false
+    }
+    session.webView.setOnKeyListener { _, keyCode, event ->
+      if (keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_UP) {
+        if (session.webView.canGoBack()) {
+          session.webView.goBack()
+          true
+        } else {
+          false
+        }
+      } else {
+        false
+      }
+    }
+  }
+
+  @SuppressLint("ClickableViewAccessibility")
+  private fun installOutsideFocusRelease(session: FloatingWindow) {
+    session.root.setOnTouchListener { _, event ->
+      if (event.actionMasked == MotionEvent.ACTION_OUTSIDE && !session.minimized) {
+        setWindowFocusable(session, false)
+      }
+      false
+    }
+  }
+
+  private fun setWindowFocusable(session: FloatingWindow, focusable: Boolean) {
+    val params = session.params
+    val notFocusable = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+    val isNotFocusable = params.flags and notFocusable != 0
+    if (focusable == !isNotFocusable) return
+
+    if (focusable) {
+      params.flags = params.flags and notFocusable.inv()
+      windowManager.updateViewLayout(session.root, params)
+      session.webView.isFocusableInTouchMode = true
+      session.webView.requestFocus()
+    } else {
+      session.webView.clearFocus()
+      params.flags = params.flags or notFocusable
+      windowManager.updateViewLayout(session.root, params)
+      val inputMethodManager =
+        getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+      inputMethodManager.hideSoftInputFromWindow(session.root.windowToken, 0)
     }
   }
 
@@ -415,6 +503,12 @@ class FloatingBrowserService : Service() {
       index,
       LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
     )
+    if (session.minimized) {
+      val miniTouchListener = createMiniBubbleTouchListener(session)
+      replacement.setOnTouchListener(miniTouchListener)
+    } else {
+      installExpandedInteraction(session)
+    }
     replacement.loadUrl(url ?: session.currentUrl)
   }
 
@@ -513,6 +607,7 @@ class FloatingBrowserService : Service() {
     session.minimized = true
     session.titleBar.visibility = View.GONE
     session.resizeBar.visibility = View.GONE
+    setWindowFocusable(session, false)
 
     val bubbleSize = dp(BUBBLE_SIZE_DP)
     params.width = bubbleSize
@@ -599,6 +694,9 @@ class FloatingBrowserService : Service() {
     params.x = session.expandedX.coerceIn(0, max(0, displayWidth - params.width))
     params.y = session.expandedY.coerceIn(0, max(0, displayHeight - params.height))
     windowManager.updateViewLayout(session.root, params)
+    setWindowFocusable(session, true)
+    installExpandedInteraction(session)
+    installOutsideFocusRelease(session)
     saveGeometry(session)
   }
 
