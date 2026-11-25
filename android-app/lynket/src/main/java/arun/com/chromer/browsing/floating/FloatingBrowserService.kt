@@ -194,8 +194,8 @@ class FloatingBrowserService : Service() {
     fun control(label: String, action: () -> Unit): Button = Button(this).apply {
       text = label
       textSize = 14f
-      minWidth = 0
-      minimumWidth = 0
+      setMinWidth(0)
+      setMinimumWidth(0)
       setPadding(0, 0, 0, 0)
       setOnClickListener { action() }
     }
