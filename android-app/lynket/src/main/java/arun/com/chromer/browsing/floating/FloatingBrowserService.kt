@@ -1,6 +1,6 @@
 /*
  * Lynket
- * Termux:Float-style resizable browser overlay.
+ * Termux:Float-style multi-window browser overlay.
  */
 package arun.com.chromer.browsing.floating
 
@@ -35,6 +35,9 @@ import androidx.core.content.ContextCompat
 import arun.com.chromer.R
 import arun.com.chromer.browsing.webview.WebViewConfigurator
 import timber.log.Timber
+import java.util.LinkedHashMap
+import java.util.concurrent.atomic.AtomicLong
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
@@ -46,6 +49,8 @@ class FloatingBrowserService : Service() {
     private const val CHANNEL_ID = "lynket_floating_browser"
     private const val NOTIFICATION_ID = 4242
     private const val PREFS = "floating_browser_window"
+    private const val BUBBLE_SIZE_DP = 64
+    private val nextWindowId = AtomicLong(1L)
 
     @JvmStatic
     fun open(context: Context, url: String) {
@@ -58,19 +63,7 @@ class FloatingBrowserService : Service() {
   }
 
   private lateinit var windowManager: WindowManager
-  private var root: LinearLayout? = null
-  private var webView: WebView? = null
-  private var titleView: TextView? = null
-  private var titleBarView: View? = null
-  private var resizeBarView: View? = null
-  private var layoutParams: WindowManager.LayoutParams? = null
-  private var currentUrl: String? = null
-  private var minimized = false
-  private var expandedX = 0
-  private var expandedY = 0
-  private var expandedWidth = 0
-  private var expandedHeight = 0
-
+  private val windows = LinkedHashMap<Long, FloatingWindow>()
   private val prefs by lazy { getSharedPreferences(PREFS, Context.MODE_PRIVATE) }
   private val density by lazy { resources.displayMetrics.density }
 
@@ -93,26 +86,27 @@ class FloatingBrowserService : Service() {
         Timber.e(error, "Unable to open overlay permission settings")
       }
       stopSelf()
-      return
     }
-
-    createWindow()
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     startForeground(NOTIFICATION_ID, buildNotification())
-    if (root == null && (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this))) {
-      createWindow()
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+      stopSelf()
+      return START_NOT_STICKY
     }
 
     if (intent?.action == ACTION_OPEN) {
-      intent.getStringExtra(EXTRA_URL)?.takeIf { it.isNotBlank() }?.let(::loadUrl)
+      intent.getStringExtra(EXTRA_URL)
+        ?.takeIf { it.isNotBlank() }
+        ?.let(::createWindow)
     }
     return START_STICKY
   }
 
   override fun onDestroy() {
-    destroyWindow()
+    windows.values.toList().forEach { destroyWindow(it, stopWhenEmpty = false) }
+    windows.clear()
     super.onDestroy()
   }
 
@@ -127,19 +121,37 @@ class FloatingBrowserService : Service() {
         )
       )
     }
+    val count = windows.size
     return NotificationCompat.Builder(this, CHANNEL_ID)
       .setSmallIcon(R.drawable.ic_chromer_notification)
       .setContentTitle("Lynket Float")
-      .setContentText("Floating browser is active")
+      .setContentText(
+        if (count <= 1) "Floating browser is active"
+        else "$count floating browser windows are active"
+      )
       .setOngoing(true)
       .setPriority(NotificationCompat.PRIORITY_LOW)
       .build()
   }
 
-  @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
-  private fun createWindow() {
-    if (root != null) return
+  private data class FloatingWindow(
+    val id: Long,
+    val root: LinearLayout,
+    val titleBar: View,
+    val resizeBar: View,
+    val titleView: TextView,
+    var webView: WebView,
+    val params: WindowManager.LayoutParams,
+    var currentUrl: String,
+    var minimized: Boolean = false,
+    var expandedX: Int = 0,
+    var expandedY: Int = 0,
+    var expandedWidth: Int = 0,
+    var expandedHeight: Int = 0
+  )
 
+  @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
+  private fun createWindow(url: String) {
     val displayWidth = resources.displayMetrics.widthPixels
     val displayHeight = resources.displayMetrics.heightPixels
     val minWidth = dp(240)
@@ -147,10 +159,12 @@ class FloatingBrowserService : Service() {
     val defaultWidth = (displayWidth * 0.86f).toInt()
     val defaultHeight = (displayHeight * 0.56f).toInt()
 
+    val id = nextWindowId.getAndIncrement()
+    val offset = ((windows.size % 5) * dp(28))
     val width = prefs.getInt("width", defaultWidth).coerceIn(minWidth, displayWidth)
     val height = prefs.getInt("height", defaultHeight).coerceIn(minHeight, displayHeight)
-    val x = prefs.getInt("x", dp(16)).coerceIn(0, max(0, displayWidth - width))
-    val y = prefs.getInt("y", dp(72)).coerceIn(0, max(0, displayHeight - height))
+    val x = (prefs.getInt("x", dp(16)) + offset).coerceIn(0, max(0, displayWidth - width))
+    val y = (prefs.getInt("y", dp(72)) + offset).coerceIn(0, max(0, displayHeight - height))
 
     val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -172,7 +186,6 @@ class FloatingBrowserService : Service() {
       this.y = y
       softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
     }
-    layoutParams = params
 
     val container = LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
@@ -187,18 +200,18 @@ class FloatingBrowserService : Service() {
       setBackgroundColor(Color.rgb(32, 33, 36))
     }
 
-    titleBarView = titleBar
-
+    val providerLabel = currentWebViewProviderLabel()
     val title = TextView(this).apply {
-      text = "Lynket Float"
+      text = providerLabel
       setTextColor(Color.WHITE)
-      textSize = 13f
+      textSize = 12f
       maxLines = 1
       gravity = Gravity.CENTER_VERTICAL
       setPadding(dp(4), 0, dp(8), 0)
     }
-    titleView = title
     titleBar.addView(title, LinearLayout.LayoutParams(0, dp(44), 1f))
+
+    lateinit var session: FloatingWindow
 
     fun control(label: String, action: () -> Unit): Button = Button(this).apply {
       text = label
@@ -209,33 +222,46 @@ class FloatingBrowserService : Service() {
       setOnClickListener { action() }
     }
 
-    val back = control("‹") { webView?.let { if (it.canGoBack()) it.goBack() } }
-    val reload = control("↻") { webView?.reload() }
-    val minimize = control("—") { minimizeToLiveBubble() }
-    val close = control("×") { stopSelf() }
+    val back = control("‹") {
+      if (::session.isInitialized && session.webView.canGoBack()) session.webView.goBack()
+    }
+    val reload = control("↻") {
+      if (::session.isInitialized) session.webView.reload()
+    }
+    val minimize = control("—") {
+      if (::session.isInitialized) minimizeToLiveBubble(session)
+    }
+    val close = control("×") {
+      if (::session.isInitialized) destroyWindow(session)
+    }
     titleBar.addView(back, LinearLayout.LayoutParams(dp(42), dp(44)))
     titleBar.addView(reload, LinearLayout.LayoutParams(dp(42), dp(44)))
     titleBar.addView(minimize, LinearLayout.LayoutParams(dp(42), dp(44)))
     titleBar.addView(close, LinearLayout.LayoutParams(dp(42), dp(44)))
+    container.addView(
+      titleBar,
+      LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(44))
+    )
 
-    container.addView(titleBar, LinearLayout.LayoutParams(
-      LinearLayout.LayoutParams.MATCH_PARENT,
-      dp(44)
-    ))
-
-    val browser = createWebView()
-    webView = browser
-    container.addView(browser, LinearLayout.LayoutParams(
-      LinearLayout.LayoutParams.MATCH_PARENT,
-      0,
-      1f
-    ))
+    val browser = createWebView(
+      onTitle = { pageTitle ->
+        if (::session.isInitialized && !pageTitle.isNullOrBlank()) {
+          session.titleView.text = pageTitle
+        }
+      },
+      onRendererGone = { deadView, deadUrl ->
+        if (::session.isInitialized) replaceDeadWebView(session, deadView, deadUrl)
+      }
+    )
+    container.addView(
+      browser,
+      LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+    )
 
     val resizeBar = LinearLayout(this).apply {
       gravity = Gravity.END or Gravity.CENTER_VERTICAL
       setBackgroundColor(Color.rgb(32, 33, 36))
     }
-    resizeBarView = resizeBar
     val resizeHint = TextView(this).apply {
       text = "↘"
       textSize = 22f
@@ -243,27 +269,46 @@ class FloatingBrowserService : Service() {
       gravity = Gravity.CENTER
     }
     resizeBar.addView(resizeHint, LinearLayout.LayoutParams(dp(48), dp(34)))
-    container.addView(resizeBar, LinearLayout.LayoutParams(
-      LinearLayout.LayoutParams.MATCH_PARENT,
-      dp(34)
-    ))
+    container.addView(
+      resizeBar,
+      LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(34))
+    )
 
-    installDragHandler(title)
-    installResizeHandler(resizeHint, minWidth, minHeight, displayWidth, displayHeight)
+    session = FloatingWindow(
+      id = id,
+      root = container,
+      titleBar = titleBar,
+      resizeBar = resizeBar,
+      titleView = title,
+      webView = browser,
+      params = params,
+      currentUrl = url,
+      expandedX = x,
+      expandedY = y,
+      expandedWidth = width,
+      expandedHeight = height
+    )
 
-    root = container
+    installDragHandler(session, title)
+    installResizeHandler(session, resizeHint, minWidth, minHeight)
+
     try {
       windowManager.addView(container, params)
+      windows[id] = session
+      browser.loadUrl(url)
+      updateNotification()
     } catch (error: Exception) {
       Timber.e(error, "Unable to attach floating browser window")
-      root = null
-      webView = null
-      stopSelf()
+      browser.destroy()
+      if (windows.isEmpty()) stopSelf()
     }
   }
 
   @SuppressLint("SetJavaScriptEnabled")
-  private fun createWebView(): WebView {
+  private fun createWebView(
+    onTitle: (String?) -> Unit,
+    onRendererGone: (WebView?, String?) -> Unit
+  ): WebView {
     return WebView(this).apply {
       setBackgroundColor(Color.rgb(18, 18, 18))
       WebViewConfigurator.configure(settings)
@@ -278,26 +323,33 @@ class FloatingBrowserService : Service() {
       }
 
       webViewClient = object : WebViewClient() {
-        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-          return handleNavigation(request?.url)
-        }
+        override fun shouldOverrideUrlLoading(
+          view: WebView?,
+          request: WebResourceRequest?
+        ): Boolean = handleNavigation(request?.url)
 
         @Suppress("DEPRECATION")
         override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
           return handleNavigation(url?.let(Uri::parse))
         }
 
+        override fun onPageFinished(view: WebView?, url: String?) {
+          super.onPageFinished(view, url)
+          url?.let { finished ->
+            windows.values.firstOrNull { it.webView === view }?.currentUrl = finished
+          }
+        }
+
         override fun onRenderProcessGone(
           view: WebView?,
           detail: RenderProcessGoneDetail?
         ): Boolean {
-          val url = view?.url ?: currentUrl
           Timber.e(
             "Floating WebView renderer gone; didCrash=%s priority=%s",
             detail?.didCrash(),
             detail?.rendererPriorityAtExit()
           )
-          replaceDeadWebView(url)
+          onRendererGone(view, view?.url)
           return true
         }
       }
@@ -305,9 +357,18 @@ class FloatingBrowserService : Service() {
       webChromeClient = object : WebChromeClient() {
         override fun onReceivedTitle(view: WebView?, title: String?) {
           super.onReceivedTitle(view, title)
-          if (!title.isNullOrBlank()) titleView?.text = title
+          onTitle(title)
         }
       }
+    }
+  }
+
+  private fun currentWebViewProviderLabel(): String {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      val provider = WebView.getCurrentWebViewPackage()
+      provider?.packageName?.substringAfterLast('.') ?: "System WebView"
+    } else {
+      "System WebView"
     }
   }
 
@@ -324,26 +385,31 @@ class FloatingBrowserService : Service() {
     }
   }
 
-  private fun replaceDeadWebView(url: String?) {
-    val container = root ?: return
-    val old = webView
-    val index = old?.let(container::indexOfChild) ?: 1
-    if (old != null) {
-      container.removeView(old)
-      old.destroy()
+  private fun replaceDeadWebView(session: FloatingWindow, deadView: WebView?, url: String?) {
+    val index = session.root.indexOfChild(deadView).coerceAtLeast(1)
+    deadView?.let {
+      session.root.removeView(it)
+      it.destroy()
     }
-    val replacement = createWebView()
-    webView = replacement
-    container.addView(
+    val replacement = createWebView(
+      onTitle = { title ->
+        if (!title.isNullOrBlank()) session.titleView.text = title
+      },
+      onRendererGone = { view, deadUrl ->
+        replaceDeadWebView(session, view, deadUrl)
+      }
+    )
+    session.webView = replacement
+    session.root.addView(
       replacement,
-      index.coerceAtLeast(1),
+      index,
       LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
     )
-    url?.let(::loadUrl)
+    replacement.loadUrl(url ?: session.currentUrl)
   }
 
   @SuppressLint("ClickableViewAccessibility")
-  private fun installDragHandler(handle: View) {
+  private fun installDragHandler(session: FloatingWindow, handle: View) {
     handle.setOnTouchListener(object : View.OnTouchListener {
       var startX = 0
       var startY = 0
@@ -351,7 +417,7 @@ class FloatingBrowserService : Service() {
       var touchY = 0f
 
       override fun onTouch(v: View?, event: MotionEvent): Boolean {
-        val params = layoutParams ?: return false
+        val params = session.params
         when (event.actionMasked) {
           MotionEvent.ACTION_DOWN -> {
             startX = params.x
@@ -363,19 +429,15 @@ class FloatingBrowserService : Service() {
           MotionEvent.ACTION_MOVE -> {
             val displayWidth = resources.displayMetrics.widthPixels
             val displayHeight = resources.displayMetrics.heightPixels
-            params.x = min(
-              max(0, displayWidth - params.width),
-              max(0, startX + (event.rawX - touchX).toInt())
-            )
-            params.y = min(
-              max(0, displayHeight - params.height),
-              max(0, startY + (event.rawY - touchY).toInt())
-            )
-            root?.let { windowManager.updateViewLayout(it, params) }
+            params.x = (startX + (event.rawX - touchX).toInt())
+              .coerceIn(0, max(0, displayWidth - params.width))
+            params.y = (startY + (event.rawY - touchY).toInt())
+              .coerceIn(0, max(0, displayHeight - params.height))
+            windowManager.updateViewLayout(session.root, params)
             return true
           }
           MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-            saveGeometry()
+            saveGeometry(session)
             return true
           }
         }
@@ -386,11 +448,10 @@ class FloatingBrowserService : Service() {
 
   @SuppressLint("ClickableViewAccessibility")
   private fun installResizeHandler(
+    session: FloatingWindow,
     handle: View,
     minWidth: Int,
-    minHeight: Int,
-    displayWidth: Int,
-    displayHeight: Int
+    minHeight: Int
   ) {
     handle.setOnTouchListener(object : View.OnTouchListener {
       var startWidth = 0
@@ -399,7 +460,7 @@ class FloatingBrowserService : Service() {
       var touchY = 0f
 
       override fun onTouch(v: View?, event: MotionEvent): Boolean {
-        val params = layoutParams ?: return false
+        val params = session.params
         when (event.actionMasked) {
           MotionEvent.ACTION_DOWN -> {
             startWidth = params.width
@@ -409,15 +470,17 @@ class FloatingBrowserService : Service() {
             return true
           }
           MotionEvent.ACTION_MOVE -> {
+            val displayWidth = resources.displayMetrics.widthPixels
+            val displayHeight = resources.displayMetrics.heightPixels
             params.width = (startWidth + (event.rawX - touchX).toInt())
               .coerceIn(minWidth, max(minWidth, displayWidth - params.x))
             params.height = (startHeight + (event.rawY - touchY).toInt())
               .coerceIn(minHeight, max(minHeight, displayHeight - params.y))
-            root?.let { windowManager.updateViewLayout(it, params) }
+            windowManager.updateViewLayout(session.root, params)
             return true
           }
           MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-            saveGeometry()
+            saveGeometry(session)
             return true
           }
         }
@@ -427,40 +490,35 @@ class FloatingBrowserService : Service() {
   }
 
   @SuppressLint("ClickableViewAccessibility")
-  private fun minimizeToLiveBubble() {
-    if (minimized) return
-    val params = layoutParams ?: return
-    val container = root ?: return
+  private fun minimizeToLiveBubble(session: FloatingWindow) {
+    if (session.minimized) return
+    val params = session.params
 
-    expandedX = params.x
-    expandedY = params.y
-    expandedWidth = params.width
-    expandedHeight = params.height
-    saveGeometry()
+    session.expandedX = params.x
+    session.expandedY = params.y
+    session.expandedWidth = params.width
+    session.expandedHeight = params.height
+    saveGeometry(session)
 
-    minimized = true
-    titleBarView?.visibility = View.GONE
-    resizeBarView?.visibility = View.GONE
+    session.minimized = true
+    session.titleBar.visibility = View.GONE
+    session.resizeBar.visibility = View.GONE
 
-    // Keep the actual WebView attached and visible: the 64dp window is a live thumbnail,
-    // so JS/network activity is not intentionally paused while the user works in another app.
-    val bubbleSize = dp(64)
+    val bubbleSize = dp(BUBBLE_SIZE_DP)
     params.width = bubbleSize
     params.height = bubbleSize
     params.x = min(params.x, max(0, resources.displayMetrics.widthPixels - bubbleSize))
     params.y = min(params.y, max(0, resources.displayMetrics.heightPixels - bubbleSize))
-    windowManager.updateViewLayout(container, params)
+    windowManager.updateViewLayout(session.root, params)
 
-    container.alpha = 0.92f
-    val miniTouchListener = createMiniBubbleTouchListener()
-    container.setOnTouchListener(miniTouchListener)
-    // WebView consumes touch events itself, so the listener must also sit on the live WebView.
-    // This keeps the renderer visible/alive while making tap-to-restore and drag reliable.
-    webView?.setOnTouchListener(miniTouchListener)
+    session.root.alpha = 0.92f
+    val miniTouchListener = createMiniBubbleTouchListener(session)
+    session.root.setOnTouchListener(miniTouchListener)
+    session.webView.setOnTouchListener(miniTouchListener)
   }
 
   @SuppressLint("ClickableViewAccessibility")
-  private fun createMiniBubbleTouchListener(): View.OnTouchListener {
+  private fun createMiniBubbleTouchListener(session: FloatingWindow): View.OnTouchListener {
     val touchSlop = dp(8)
     var startX = 0
     var startY = 0
@@ -469,8 +527,7 @@ class FloatingBrowserService : Service() {
     var moved = false
 
     return View.OnTouchListener { _, event ->
-      val params = layoutParams ?: return@OnTouchListener false
-      val container = root ?: return@OnTouchListener false
+      val params = session.params
       when (event.actionMasked) {
         MotionEvent.ACTION_DOWN -> {
           startX = params.x
@@ -484,26 +541,23 @@ class FloatingBrowserService : Service() {
         MotionEvent.ACTION_MOVE -> {
           val dx = (event.rawX - downRawX).toInt()
           val dy = (event.rawY - downRawY).toInt()
-          if (!moved && (kotlin.math.abs(dx) > touchSlop || kotlin.math.abs(dy) > touchSlop)) {
-            moved = true
-          }
+          if (!moved && (abs(dx) > touchSlop || abs(dy) > touchSlop)) moved = true
           if (moved) {
             val displayWidth = resources.displayMetrics.widthPixels
             val displayHeight = resources.displayMetrics.heightPixels
             params.x = (startX + dx).coerceIn(0, max(0, displayWidth - params.width))
             params.y = (startY + dy).coerceIn(0, max(0, displayHeight - params.height))
-            windowManager.updateViewLayout(container, params)
+            windowManager.updateViewLayout(session.root, params)
           }
           true
         }
 
         MotionEvent.ACTION_UP -> {
           if (moved) {
-            // Preserve the dragged bubble position as the next expanded-window anchor.
-            expandedX = params.x
-            expandedY = params.y
+            session.expandedX = params.x
+            session.expandedY = params.y
           } else {
-            restoreFromLiveBubble()
+            restoreFromLiveBubble(session)
           }
           true
         }
@@ -515,65 +569,62 @@ class FloatingBrowserService : Service() {
   }
 
   @SuppressLint("ClickableViewAccessibility")
-  private fun restoreFromLiveBubble() {
-    if (!minimized) return
-    val params = layoutParams ?: return
-    val container = root ?: return
+  private fun restoreFromLiveBubble(session: FloatingWindow) {
+    if (!session.minimized) return
+    val params = session.params
 
-    minimized = false
-    container.setOnTouchListener(null)
-    webView?.setOnTouchListener(null)
-    container.alpha = 1f
-    titleBarView?.visibility = View.VISIBLE
-    resizeBarView?.visibility = View.VISIBLE
-    params.width = expandedWidth.coerceAtLeast(dp(240))
-    params.height = expandedHeight.coerceAtLeast(dp(280))
+    session.minimized = false
+    session.root.setOnTouchListener(null)
+    session.webView.setOnTouchListener(null)
+    session.root.alpha = 1f
+    session.titleBar.visibility = View.VISIBLE
+    session.resizeBar.visibility = View.VISIBLE
+
+    params.width = session.expandedWidth.coerceAtLeast(dp(240))
+    params.height = session.expandedHeight.coerceAtLeast(dp(280))
     val displayWidth = resources.displayMetrics.widthPixels
     val displayHeight = resources.displayMetrics.heightPixels
-    params.x = expandedX.coerceIn(0, max(0, displayWidth - params.width))
-    params.y = expandedY.coerceIn(0, max(0, displayHeight - params.height))
-    windowManager.updateViewLayout(container, params)
-    saveGeometry()
+    params.x = session.expandedX.coerceIn(0, max(0, displayWidth - params.width))
+    params.y = session.expandedY.coerceIn(0, max(0, displayHeight - params.height))
+    windowManager.updateViewLayout(session.root, params)
+    saveGeometry(session)
   }
 
-  private fun saveGeometry() {
-    val params = layoutParams ?: return
-    prefs.edit()
-      .putInt("x", params.x)
-      .putInt("y", params.y)
-      .putInt("width", params.width)
-      .putInt("height", params.height)
-      .apply()
-  }
-
-  private fun loadUrl(url: String) {
-    currentUrl = url
-    titleView?.text = Uri.parse(url).host ?: "Lynket Float"
-    webView?.loadUrl(url)
-  }
-
-  private fun destroyWindow() {
-    val container = root
-    if (container != null) {
-      try {
-        windowManager.removeView(container)
-      } catch (error: Exception) {
-        Timber.e(error, "Unable to remove floating browser window")
-      }
+  private fun saveGeometry(session: FloatingWindow) {
+    val params = session.params
+    if (!session.minimized) {
+      prefs.edit()
+        .putInt("x", params.x)
+        .putInt("y", params.y)
+        .putInt("width", params.width)
+        .putInt("height", params.height)
+        .apply()
     }
-    webView?.apply {
+  }
+
+  private fun destroyWindow(session: FloatingWindow, stopWhenEmpty: Boolean = true) {
+    windows.remove(session.id)
+    try {
+      windowManager.removeView(session.root)
+    } catch (error: Exception) {
+      Timber.e(error, "Unable to remove floating browser window")
+    }
+    session.webView.apply {
+      setOnTouchListener(null)
       stopLoading()
       loadUrl("about:blank")
       clearHistory()
       removeAllViews()
       destroy()
     }
-    webView = null
-    root = null
-    titleBarView = null
-    resizeBarView = null
-    layoutParams = null
-    minimized = false
+
+    updateNotification()
+    if (stopWhenEmpty && windows.isEmpty()) stopSelf()
+  }
+
+  private fun updateNotification() {
+    val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    manager.notify(NOTIFICATION_ID, buildNotification())
   }
 
   private fun dp(value: Int): Int = (value * density + 0.5f).toInt()
