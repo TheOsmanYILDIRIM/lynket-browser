@@ -60,6 +60,7 @@ class BrowsingModeAdapter extends RecyclerView.Adapter<BrowsingModeAdapter.Brows
   public static final int SLIDE_OVER = 0;
   public static final int WEB_HEADS = 1;
   public static final int NATIVE_BUBBLES = 2;
+  public static final int FLOATING_BROWSER = 3;
   private final List<String> settingsItems = new ArrayList<>();
   private final RxPreferences rxPreferences;
   private BrowsingModeClickListener browsingModeClickListener = (position, view) -> {
@@ -73,6 +74,7 @@ class BrowsingModeAdapter extends RecyclerView.Adapter<BrowsingModeAdapter.Brows
     settingsItems.add(application.getString(R.string.browsing_mode_web_heads));
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
       settingsItems.add(application.getString(R.string.browsing_mode_native_bubbles));
+      settingsItems.add(application.getString(R.string.browsing_mode_floating_browser));
     }
   }
 
@@ -145,6 +147,7 @@ class BrowsingModeAdapter extends RecyclerView.Adapter<BrowsingModeAdapter.Brows
       final int position = getAdapterPosition();
       final boolean webHeads = Preferences.get(selector.getContext()).webHeads();
       final boolean nativeBubbles = rxPreferences.getNativeBubbles().get();
+      final boolean floatingBrowser = rxPreferences.getFloatingBrowser().get();
       browsingModeRoot.setForeground(ColorUtil.getRippleDrawableCompat(Color.parseColor("#42ffffff")));
       switch (position) {
         case SLIDE_OVER:
@@ -153,7 +156,7 @@ class BrowsingModeAdapter extends RecyclerView.Adapter<BrowsingModeAdapter.Brows
             .color(Color.WHITE)
             .sizeDp(24));
           selector.setImageDrawable(new IconicsDrawable(selector.getContext())
-            .icon(webHeads || nativeBubbles
+            .icon(webHeads || nativeBubbles || floatingBrowser
               ? Icon.cmd_checkbox_blank_circle_outline
               : Icon.cmd_checkbox_marked_circle)
             .color(Color.WHITE)
@@ -195,6 +198,22 @@ class BrowsingModeAdapter extends RecyclerView.Adapter<BrowsingModeAdapter.Brows
           subtitle.setTextColor(ColorUtils.setAlphaComponent(materialDarkColor, (int) (0.8 * 255)));
           subtitle.setText(R.string.browsing_mode_native_bubbles_explanation);
           browsingModeRoot.setCardBackgroundColor(ContextCompat.getColor(browsingModeRoot.getContext(), R.color.android_10_color));
+          break;
+        case FLOATING_BROWSER:
+          icon.setImageDrawable(new IconicsDrawable(icon.getContext())
+            .icon(Icon.cmd_open_in_app)
+            .color(Color.WHITE)
+            .sizeDp(24));
+          selector.setImageDrawable(new IconicsDrawable(selector.getContext())
+            .icon(!floatingBrowser
+              ? Icon.cmd_checkbox_blank_circle_outline
+              : Icon.cmd_checkbox_marked_circle)
+            .color(Color.WHITE)
+            .sizeDp(24));
+          title.setTextColor(Color.WHITE);
+          subtitle.setTextColor(Color.WHITE);
+          subtitle.setText(R.string.browsing_mode_floating_browser_explanation);
+          browsingModeRoot.setCardBackgroundColor(ContextCompat.getColor(browsingModeRoot.getContext(), R.color.md_light_blue_A700));
           break;
       }
     }

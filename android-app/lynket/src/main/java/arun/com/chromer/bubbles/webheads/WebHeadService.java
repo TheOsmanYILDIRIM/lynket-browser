@@ -84,7 +84,6 @@ import javax.inject.Inject;
 import arun.com.chromer.R;
 import arun.com.chromer.browsing.article.ArticlePreloader;
 import arun.com.chromer.browsing.customtabs.CustomTabManager;
-import arun.com.chromer.browsing.floating.FloatingBrowserService;
 import arun.com.chromer.browsing.newtab.NewTabDialogActivity;
 import arun.com.chromer.bubbles.webheads.physics.SpringChain2D;
 import arun.com.chromer.bubbles.webheads.ui.WebHeadContract;
@@ -481,10 +480,7 @@ public class WebHeadService extends OverlayService implements WebHeadContract,
 
   @Override
   public void onWebHeadClick(@NonNull WebHead webHead) {
-    // Termux:Float-style browsing: keep the actual WebView in a visible application-overlay
-    // window owned by a foreground service. It stays on screen and active while another app is
-    // foreground, instead of relying on an Activity/Custom Tab that Android may background.
-    FloatingBrowserService.open(this, webHead.getWebsite().preferredUrl());
+    tabsManager.openUrl(this, webHead.getWebsite(), true, true, false, webHead.isFromAmp(), webHead.isIncognito());
 
     // If user prefers to the close the head on opening the link, then call destroySelf()
     // which will take care of closing and detaching the web head

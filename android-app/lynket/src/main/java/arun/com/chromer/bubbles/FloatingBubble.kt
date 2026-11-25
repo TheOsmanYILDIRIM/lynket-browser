@@ -22,8 +22,10 @@ package arun.com.chromer.bubbles
 
 import android.content.Context
 import androidx.annotation.ColorInt
+import arun.com.chromer.bubbles.BubbleType.FLOATING_BROWSER
 import arun.com.chromer.bubbles.BubbleType.NATIVE
 import arun.com.chromer.bubbles.BubbleType.WEB_HEADS
+import arun.com.chromer.browsing.floating.FloatingBrowserFloatingBubble
 import arun.com.chromer.bubbles.system.NativeFloatingBubble
 import arun.com.chromer.bubbles.webheads.WebHeadsFloatingBubble
 import arun.com.chromer.data.website.model.Website
@@ -48,7 +50,8 @@ interface FloatingBubble {
 
 enum class BubbleType {
   NATIVE,
-  WEB_HEADS
+  WEB_HEADS,
+  FLOATING_BROWSER
 }
 
 @Singleton
@@ -56,10 +59,12 @@ class FloatingBubbleFactory
 @Inject
 constructor(
   private val nativeFloatingBubble: Provider<NativeFloatingBubble>,
-  private val webHeadsFloatingBubble: Provider<WebHeadsFloatingBubble>
+  private val webHeadsFloatingBubble: Provider<WebHeadsFloatingBubble>,
+  private val floatingBrowserBubble: Provider<FloatingBrowserFloatingBubble>
 ) {
   operator fun get(bubble: BubbleType): FloatingBubble = when (bubble) {
     NATIVE -> nativeFloatingBubble.get()
     WEB_HEADS -> webHeadsFloatingBubble.get()
+    FLOATING_BROWSER -> floatingBrowserBubble.get()
   }
 }

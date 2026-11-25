@@ -124,8 +124,10 @@ public class BrowsingModeActivity extends BaseActivity implements BrowsingModeAd
   public void onModeClicked(int position, View view) {
     boolean webHeadsEnabled = position == BrowsingModeAdapter.WEB_HEADS;
     boolean nativeBubbles = position == BrowsingModeAdapter.NATIVE_BUBBLES;
+    boolean floatingBrowser = position == BrowsingModeAdapter.FLOATING_BROWSER;
 
     rxPreferences.getNativeBubbles().set(nativeBubbles);
+    rxPreferences.getFloatingBrowser().set(floatingBrowser);
     Preferences.get(this).webHeads(webHeadsEnabled);
 
     if (webHeadsEnabled) {
@@ -134,6 +136,16 @@ public class BrowsingModeActivity extends BaseActivity implements BrowsingModeAd
       } else {
         Preferences.get(this).webHeads(false);
         // Utils.openDrawOverlaySettings(this);
+        final Snackbar snackbar = Snackbar.make(coordinatorLayout, R.string.overlay_permission_content, Snackbar.LENGTH_INDEFINITE);
+        snackbar.setAction(R.string.grant, v -> {
+          snackbar.dismiss();
+          Utils.openDrawOverlaySettings(BrowsingModeActivity.this);
+        });
+        snackbar.show();
+      }
+    } else if (floatingBrowser) {
+      if (!Utils.isOverlayGranted(this)) {
+        rxPreferences.getFloatingBrowser().set(false);
         final Snackbar snackbar = Snackbar.make(coordinatorLayout, R.string.overlay_permission_content, Snackbar.LENGTH_INDEFINITE);
         snackbar.setAction(R.string.grant, v -> {
           snackbar.dismiss();

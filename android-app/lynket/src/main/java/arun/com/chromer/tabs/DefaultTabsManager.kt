@@ -46,6 +46,7 @@ import arun.com.chromer.browsing.customtabs.CustomTabActivity
 import arun.com.chromer.browsing.customtabs.CustomTabs
 import arun.com.chromer.browsing.newtab.NewTabDialogActivity
 import arun.com.chromer.browsing.webview.WebViewActivity
+import arun.com.chromer.bubbles.BubbleType.FLOATING_BROWSER
 import arun.com.chromer.bubbles.BubbleType.NATIVE
 import arun.com.chromer.bubbles.BubbleType.WEB_HEADS
 import arun.com.chromer.bubbles.FloatingBubbleFactory
@@ -118,7 +119,7 @@ constructor(
       clearNonBrowsingActivities()
     }
     // Open in web heads mode if we this command did not come from web heads.
-    if ((preferences.webHeads() || rxPreferences.nativeBubbles.get()) && !fromWebHeads) {
+    if ((preferences.webHeads() || rxPreferences.nativeBubbles.get() || rxPreferences.floatingBrowser.get()) && !fromWebHeads) {
       openWebHeads(context, website = website, fromMinimize = fromAmp, incognito = incognito)
       return@fromAction
     }
@@ -236,7 +237,7 @@ constructor(
 
   override fun minimizeTabByUrl(url: String, fromClass: String, incognito: Boolean) {
     rxEventBus.post(TabsManager.MinimizeEvent(TabsManager.Tab(url, getTabType(fromClass))))
-    if (preferences.webHeads() || rxPreferences.nativeBubbles.get() || preferences.minimizeToWebHead()) {
+    if (preferences.webHeads() || rxPreferences.nativeBubbles.get() || rxPreferences.floatingBrowser.get() || preferences.minimizeToWebHead()) {
       // When minimizing, don't try to handle aggressive loading cases.
       openWebHeads(application, website = Website(url), fromMinimize = true, incognito = incognito)
     }
@@ -358,8 +359,14 @@ constructor(
     val url = website.preferredUrl()
     val bubbles = rxPreferences.nativeBubbles.get()
     val webHeads = preferences.webHeads()
+    val floatingBrowser = rxPreferences.floatingBrowser.get()
 
-    floatingBubbleFactory[if (bubbles) NATIVE else WEB_HEADS].openBubble(
+    val bubbleType = when {
+      floatingBrowser -> FLOATING_BROWSER
+      bubbles -> NATIVE
+      else -> WEB_HEADS
+    }
+    floatingBubbleFactory[bubbleType].openBubble(
       website,
       fromMinimize,
       fromAmp,
@@ -367,6 +374,10 @@ constructor(
       context,
       customizedWebsiteColor(website)
     )
+
+    if (floatingBrowser) {
+      return
+    }
 
     val shouldUseWebView = shouldUseWebView(incognito)
 

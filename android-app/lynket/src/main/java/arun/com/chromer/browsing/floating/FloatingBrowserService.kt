@@ -61,8 +61,15 @@ class FloatingBrowserService : Service() {
   private var root: LinearLayout? = null
   private var webView: WebView? = null
   private var titleView: TextView? = null
+  private var titleBarView: View? = null
+  private var resizeBarView: View? = null
   private var layoutParams: WindowManager.LayoutParams? = null
   private var currentUrl: String? = null
+  private var minimized = false
+  private var expandedX = 0
+  private var expandedY = 0
+  private var expandedWidth = 0
+  private var expandedHeight = 0
 
   private val prefs by lazy { getSharedPreferences(PREFS, Context.MODE_PRIVATE) }
   private val density by lazy { resources.displayMetrics.density }
@@ -180,6 +187,8 @@ class FloatingBrowserService : Service() {
       setBackgroundColor(Color.rgb(32, 33, 36))
     }
 
+    titleBarView = titleBar
+
     val title = TextView(this).apply {
       text = "Lynket Float"
       setTextColor(Color.WHITE)
@@ -202,9 +211,11 @@ class FloatingBrowserService : Service() {
 
     val back = control("‹") { webView?.let { if (it.canGoBack()) it.goBack() } }
     val reload = control("↻") { webView?.reload() }
+    val minimize = control("—") { minimizeToLiveBubble() }
     val close = control("×") { stopSelf() }
     titleBar.addView(back, LinearLayout.LayoutParams(dp(42), dp(44)))
     titleBar.addView(reload, LinearLayout.LayoutParams(dp(42), dp(44)))
+    titleBar.addView(minimize, LinearLayout.LayoutParams(dp(42), dp(44)))
     titleBar.addView(close, LinearLayout.LayoutParams(dp(42), dp(44)))
 
     container.addView(titleBar, LinearLayout.LayoutParams(
@@ -224,6 +235,7 @@ class FloatingBrowserService : Service() {
       gravity = Gravity.END or Gravity.CENTER_VERTICAL
       setBackgroundColor(Color.rgb(32, 33, 36))
     }
+    resizeBarView = resizeBar
     val resizeHint = TextView(this).apply {
       text = "↘"
       textSize = 22f
@@ -414,6 +426,56 @@ class FloatingBrowserService : Service() {
     })
   }
 
+  @SuppressLint("ClickableViewAccessibility")
+  private fun minimizeToLiveBubble() {
+    if (minimized) return
+    val params = layoutParams ?: return
+    val container = root ?: return
+
+    expandedX = params.x
+    expandedY = params.y
+    expandedWidth = params.width
+    expandedHeight = params.height
+    saveGeometry()
+
+    minimized = true
+    titleBarView?.visibility = View.GONE
+    resizeBarView?.visibility = View.GONE
+
+    // Keep the actual WebView attached and visible: the 64dp window is a live thumbnail,
+    // so JS/network activity is not intentionally paused while the user works in another app.
+    val bubbleSize = dp(64)
+    params.width = bubbleSize
+    params.height = bubbleSize
+    params.x = min(params.x, max(0, resources.displayMetrics.widthPixels - bubbleSize))
+    params.y = min(params.y, max(0, resources.displayMetrics.heightPixels - bubbleSize))
+    windowManager.updateViewLayout(container, params)
+
+    container.alpha = 0.92f
+    container.setOnTouchListener { _, event ->
+      if (event.actionMasked == MotionEvent.ACTION_UP) restoreFromLiveBubble()
+      true
+    }
+  }
+
+  @SuppressLint("ClickableViewAccessibility")
+  private fun restoreFromLiveBubble() {
+    if (!minimized) return
+    val params = layoutParams ?: return
+    val container = root ?: return
+
+    minimized = false
+    container.setOnTouchListener(null)
+    container.alpha = 1f
+    titleBarView?.visibility = View.VISIBLE
+    resizeBarView?.visibility = View.VISIBLE
+    params.x = expandedX
+    params.y = expandedY
+    params.width = expandedWidth.coerceAtLeast(dp(240))
+    params.height = expandedHeight.coerceAtLeast(dp(280))
+    windowManager.updateViewLayout(container, params)
+  }
+
   private fun saveGeometry() {
     val params = layoutParams ?: return
     prefs.edit()
@@ -448,7 +510,10 @@ class FloatingBrowserService : Service() {
     }
     webView = null
     root = null
+    titleBarView = null
+    resizeBarView = null
     layoutParams = null
+    minimized = false
   }
 
   private fun dp(value: Int): Int = (value * density + 0.5f).toInt()
