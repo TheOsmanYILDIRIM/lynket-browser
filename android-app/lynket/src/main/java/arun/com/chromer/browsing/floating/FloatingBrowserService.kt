@@ -452,9 +452,65 @@ class FloatingBrowserService : Service() {
     windowManager.updateViewLayout(container, params)
 
     container.alpha = 0.92f
-    container.setOnTouchListener { _, event ->
-      if (event.actionMasked == MotionEvent.ACTION_UP) restoreFromLiveBubble()
-      true
+    val miniTouchListener = createMiniBubbleTouchListener()
+    container.setOnTouchListener(miniTouchListener)
+    // WebView consumes touch events itself, so the listener must also sit on the live WebView.
+    // This keeps the renderer visible/alive while making tap-to-restore and drag reliable.
+    webView?.setOnTouchListener(miniTouchListener)
+  }
+
+  @SuppressLint("ClickableViewAccessibility")
+  private fun createMiniBubbleTouchListener(): View.OnTouchListener {
+    val touchSlop = dp(8)
+    var startX = 0
+    var startY = 0
+    var downRawX = 0f
+    var downRawY = 0f
+    var moved = false
+
+    return View.OnTouchListener { _, event ->
+      val params = layoutParams ?: return@OnTouchListener false
+      val container = root ?: return@OnTouchListener false
+      when (event.actionMasked) {
+        MotionEvent.ACTION_DOWN -> {
+          startX = params.x
+          startY = params.y
+          downRawX = event.rawX
+          downRawY = event.rawY
+          moved = false
+          true
+        }
+
+        MotionEvent.ACTION_MOVE -> {
+          val dx = (event.rawX - downRawX).toInt()
+          val dy = (event.rawY - downRawY).toInt()
+          if (!moved && (kotlin.math.abs(dx) > touchSlop || kotlin.math.abs(dy) > touchSlop)) {
+            moved = true
+          }
+          if (moved) {
+            val displayWidth = resources.displayMetrics.widthPixels
+            val displayHeight = resources.displayMetrics.heightPixels
+            params.x = (startX + dx).coerceIn(0, max(0, displayWidth - params.width))
+            params.y = (startY + dy).coerceIn(0, max(0, displayHeight - params.height))
+            windowManager.updateViewLayout(container, params)
+          }
+          true
+        }
+
+        MotionEvent.ACTION_UP -> {
+          if (moved) {
+            // Preserve the dragged bubble position as the next expanded-window anchor.
+            expandedX = params.x
+            expandedY = params.y
+          } else {
+            restoreFromLiveBubble()
+          }
+          true
+        }
+
+        MotionEvent.ACTION_CANCEL -> true
+        else -> true
+      }
     }
   }
 
@@ -466,14 +522,18 @@ class FloatingBrowserService : Service() {
 
     minimized = false
     container.setOnTouchListener(null)
+    webView?.setOnTouchListener(null)
     container.alpha = 1f
     titleBarView?.visibility = View.VISIBLE
     resizeBarView?.visibility = View.VISIBLE
-    params.x = expandedX
-    params.y = expandedY
     params.width = expandedWidth.coerceAtLeast(dp(240))
     params.height = expandedHeight.coerceAtLeast(dp(280))
+    val displayWidth = resources.displayMetrics.widthPixels
+    val displayHeight = resources.displayMetrics.heightPixels
+    params.x = expandedX.coerceIn(0, max(0, displayWidth - params.width))
+    params.y = expandedY.coerceIn(0, max(0, displayHeight - params.height))
     windowManager.updateViewLayout(container, params)
+    saveGeometry()
   }
 
   private fun saveGeometry() {
