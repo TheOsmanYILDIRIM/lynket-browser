@@ -211,7 +211,7 @@ class FloatingBrowserService : Service() {
     }
     titleBar.addView(title, LinearLayout.LayoutParams(0, dp(44), 1f))
 
-    lateinit var session: FloatingWindow
+    var session: FloatingWindow? = null
 
     fun control(label: String, action: () -> Unit): Button = Button(this).apply {
       text = label
@@ -223,16 +223,16 @@ class FloatingBrowserService : Service() {
     }
 
     val back = control("‹") {
-      if (::session.isInitialized && session.webView.canGoBack()) session.webView.goBack()
+      session?.webView?.let { if (it.canGoBack()) it.goBack() }
     }
     val reload = control("↻") {
-      if (::session.isInitialized) session.webView.reload()
+      session?.webView?.reload()
     }
     val minimize = control("—") {
-      if (::session.isInitialized) minimizeToLiveBubble(session)
+      session?.let(::minimizeToLiveBubble)
     }
     val close = control("×") {
-      if (::session.isInitialized) destroyWindow(session)
+      session?.let(::destroyWindow)
     }
     titleBar.addView(back, LinearLayout.LayoutParams(dp(42), dp(44)))
     titleBar.addView(reload, LinearLayout.LayoutParams(dp(42), dp(44)))
@@ -245,12 +245,13 @@ class FloatingBrowserService : Service() {
 
     val browser = createWebView(
       onTitle = { pageTitle ->
-        if (::session.isInitialized && !pageTitle.isNullOrBlank()) {
-          session.titleView.text = pageTitle
+        val current = session
+        if (current != null && !pageTitle.isNullOrBlank()) {
+          current.titleView.text = pageTitle
         }
       },
       onRendererGone = { deadView, deadUrl ->
-        if (::session.isInitialized) replaceDeadWebView(session, deadView, deadUrl)
+        session?.let { replaceDeadWebView(it, deadView, deadUrl) }
       }
     )
     container.addView(
@@ -274,7 +275,7 @@ class FloatingBrowserService : Service() {
       LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(34))
     )
 
-    session = FloatingWindow(
+    val createdSession = FloatingWindow(
       id = id,
       root = container,
       titleBar = titleBar,
@@ -289,12 +290,13 @@ class FloatingBrowserService : Service() {
       expandedHeight = height
     )
 
-    installDragHandler(session, title)
-    installResizeHandler(session, resizeHint, minWidth, minHeight)
+    session = createdSession
+    installDragHandler(createdSession, title)
+    installResizeHandler(createdSession, resizeHint, minWidth, minHeight)
 
     try {
       windowManager.addView(container, params)
-      windows[id] = session
+      windows[id] = createdSession
       browser.loadUrl(url)
       updateNotification()
     } catch (error: Exception) {
