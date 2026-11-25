@@ -55,4 +55,20 @@
     <item>@string/minimize_normally</item>
     <item>@string/minimize_to_web_head</item>
   </string-array>
+  <string-array name="floatingBrowserZoomKeys">
+    <item>100</item>
+    <item>90</item>
+    <item>80</item>
+    <item>70</item>
+    <item>60</item>
+    <item>50</item>
+  </string-array>
+  <string-array name="floatingBrowserZoomValues">
+    <item>100%</item>
+    <item>90%</item>
+    <item>80%</item>
+    <item>70%</item>
+    <item>60%</item>
+    <item>50%</item>
+  </string-array>
 </resources>

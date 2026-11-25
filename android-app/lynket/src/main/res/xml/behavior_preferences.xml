@@ -33,5 +33,13 @@
       android:summary="@string/per_app_settings_explanation"
       android:title="@string/per_app_settings" />
     <!--suppress AndroidElementNotAllowed -->
+    <ListPreference
+      android:defaultValue="80"
+      android:dialogTitle="@string/floating_browser_zoom_title"
+      android:entries="@array/floatingBrowserZoomValues"
+      android:entryValues="@array/floatingBrowserZoomKeys"
+      android:key="floating_browser_zoom_preference"
+      android:summary="@string/floating_browser_zoom_summary"
+      android:title="@string/floating_browser_zoom_title" />
   </PreferenceCategory>
 </PreferenceScreen>

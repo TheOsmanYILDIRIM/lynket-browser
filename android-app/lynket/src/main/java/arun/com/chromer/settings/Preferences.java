@@ -89,6 +89,7 @@ public class Preferences {
   public static final String USE_WEBVIEW_PREF = "use_webview_pref";
   public static final String MINIMIZE_BEHAVIOR_PREFERENCE = "minimize_behavior_preference";
   public static final String MINIMIZE_BEHAVIOR_PREFERENCE_KEY = "2";
+  public static final String FLOATING_BROWSER_ZOOM = "floating_browser_zoom_preference";
   private static final String WEB_HEAD_FAVICON = "webhead_favicons_pref";
   private static final String PER_APP_SETTINGS = "blacklist_preference";
   private static final String FIRST_RUN = "firstrun_3";
@@ -290,6 +291,14 @@ public class Preferences {
 
   public boolean useWebView() {
     return getDefaultSharedPreferences().getBoolean(USE_WEBVIEW_PREF, false);
+  }
+
+  public int floatingBrowserZoomPercent() {
+    try {
+      return parseInt(getDefaultSharedPreferences().getString(FLOATING_BROWSER_ZOOM, "80"));
+    } catch (NumberFormatException ignored) {
+      return 80;
+    }
   }
 
   public void minimizeToWebHead(boolean preference) {

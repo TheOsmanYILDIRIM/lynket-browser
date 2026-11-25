@@ -34,6 +34,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import arun.com.chromer.R
 import arun.com.chromer.browsing.webview.WebViewConfigurator
+import arun.com.chromer.settings.Preferences
 import timber.log.Timber
 import java.util.LinkedHashMap
 import java.util.concurrent.atomic.AtomicLong
@@ -315,6 +316,13 @@ class FloatingBrowserService : Service() {
       setBackgroundColor(Color.rgb(18, 18, 18))
       WebViewConfigurator.configure(settings)
       settings.mediaPlaybackRequiresUserGesture = false
+      settings.useWideViewPort = true
+      settings.loadWithOverviewMode = false
+      setInitialScale(
+        Preferences.get(this@FloatingBrowserService)
+          .floatingBrowserZoomPercent()
+          .coerceIn(50, 100)
+      )
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
       }
@@ -513,7 +521,9 @@ class FloatingBrowserService : Service() {
     params.y = min(params.y, max(0, resources.displayMetrics.heightPixels - bubbleSize))
     windowManager.updateViewLayout(session.root, params)
 
-    session.root.alpha = 0.92f
+    // Keep the live WebView attached/rendering but make the tiny bubble unobtrusive.
+    // Alpha changes composition only; it does not pause/detach the renderer.
+    session.root.alpha = 0.35f
     val miniTouchListener = createMiniBubbleTouchListener(session)
     session.root.setOnTouchListener(miniTouchListener)
     session.webView.setOnTouchListener(miniTouchListener)

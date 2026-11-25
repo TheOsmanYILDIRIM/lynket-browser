@@ -345,6 +345,8 @@
   <string name="browsing_mode_native_bubbles">Native Bubbles (Beta)</string>
   <string name="browsing_mode_floating_browser">Floating Browser</string>
   <string name="browsing_mode_floating_browser_explanation">Keep the live page in a resizable always-on-top window. Minimize it to a tiny live bubble and tap to restore.</string>
+  <string name="floating_browser_zoom_title">Floating Browser zoom</string>
+  <string name="floating_browser_zoom_summary">Page scale for Floating Browser windows. Lower values zoom out and show more content.</string>
   <string name="browsing_mode_native_bubbles_warning">Native bubbles integration is in beta and requires extra steps to be enabled. Please note that current implementation is not final and may change in the future. \n\nKnown issues:\nOnly WebView provider works with floating window.</string>
   <string name="browsing_mode_native_bubbles_guide">Guide</string>
   <string name="bubble_external_browser_title">Open bubbles in external browser</string>
