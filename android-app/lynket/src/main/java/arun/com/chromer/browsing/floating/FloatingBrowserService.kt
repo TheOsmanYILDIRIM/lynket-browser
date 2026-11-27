@@ -9,6 +9,8 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.app.DownloadManager
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -17,7 +19,9 @@ import android.graphics.PixelFormat
 import android.net.Uri
 import android.os.Build
 import android.os.IBinder
+import android.os.Environment
 import android.provider.Settings
+import android.view.ActionMode
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -25,11 +29,14 @@ import android.view.View
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
 import android.webkit.CookieManager
+import android.webkit.ValueCallback
+import android.webkit.WebView.WebViewTransport
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.URLUtil
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -40,6 +47,7 @@ import arun.com.chromer.browsing.webview.WebViewConfigurator
 import arun.com.chromer.settings.Preferences
 import timber.log.Timber
 import java.util.LinkedHashMap
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 import kotlin.math.max
@@ -55,6 +63,16 @@ class FloatingBrowserService : Service() {
     private const val PREFS = "floating_browser_window"
     private const val BUBBLE_SIZE_DP = 64
     private val nextWindowId = AtomicLong(1L)
+    private val nextFileChooserId = AtomicLong(1L)
+    private val fileChooserCallbacks = ConcurrentHashMap<Long, ValueCallback<Array<Uri>>>()
+
+    internal fun deliverFileChooserResult(requestId: Long, uris: Array<Uri>?) {
+      fileChooserCallbacks.remove(requestId)?.onReceiveValue(uris)
+    }
+
+    internal fun cancelFileChooser(requestId: Long) {
+      fileChooserCallbacks.remove(requestId)?.onReceiveValue(null)
+    }
 
     @JvmStatic
     fun open(context: Context, url: String) {
@@ -147,6 +165,45 @@ class FloatingBrowserService : Service() {
       .setOngoing(true)
       .setPriority(NotificationCompat.PRIORITY_LOW)
       .build()
+  }
+
+  private class SelectionAwareWebView(context: Context) : WebView(context) {
+    var selectionActionModeActive: Boolean = false
+      private set
+
+    override fun startActionMode(callback: ActionMode.Callback?): ActionMode? {
+      return startSelectionActionMode(callback) { super.startActionMode(it) }
+    }
+
+    override fun startActionMode(callback: ActionMode.Callback?, type: Int): ActionMode? {
+      return startSelectionActionMode(callback) { super.startActionMode(it, type) }
+    }
+
+    private fun startSelectionActionMode(
+      callback: ActionMode.Callback?,
+      starter: (ActionMode.Callback?) -> ActionMode?
+    ): ActionMode? {
+      if (callback == null) return starter(null)
+      selectionActionModeActive = true
+      val wrapped = object : ActionMode.Callback {
+        override fun onCreateActionMode(mode: ActionMode?, menu: android.view.Menu?): Boolean =
+          callback.onCreateActionMode(mode, menu)
+
+        override fun onPrepareActionMode(mode: ActionMode?, menu: android.view.Menu?): Boolean =
+          callback.onPrepareActionMode(mode, menu)
+
+        override fun onActionItemClicked(mode: ActionMode?, item: android.view.MenuItem?): Boolean =
+          callback.onActionItemClicked(mode, item)
+
+        override fun onDestroyActionMode(mode: ActionMode?) {
+          selectionActionModeActive = false
+          callback.onDestroyActionMode(mode)
+        }
+      }
+      val mode = starter(wrapped)
+      if (mode == null) selectionActionModeActive = false
+      return mode
+    }
   }
 
   private data class FloatingWindow(
@@ -329,7 +386,7 @@ class FloatingBrowserService : Service() {
     onTitle: (String?) -> Unit,
     onRendererGone: (WebView?, String?) -> Unit
   ): WebView {
-    return WebView(this).apply {
+    return SelectionAwareWebView(this).apply {
       setBackgroundColor(Color.rgb(18, 18, 18))
       WebViewConfigurator.configure(settings)
       settings.mediaPlaybackRequiresUserGesture = false
@@ -386,7 +443,80 @@ class FloatingBrowserService : Service() {
           super.onReceivedTitle(view, title)
           onTitle(title)
         }
+
+        override fun onShowFileChooser(
+          webView: WebView?,
+          filePathCallback: ValueCallback<Array<Uri>>?,
+          fileChooserParams: FileChooserParams?
+        ): Boolean {
+          if (filePathCallback == null || fileChooserParams == null) return false
+          val requestId = nextFileChooserId.getAndIncrement()
+          fileChooserCallbacks.put(requestId, filePathCallback)?.onReceiveValue(null)
+
+          val chooserIntent = try {
+            fileChooserParams.createIntent()
+          } catch (error: Exception) {
+            Timber.e(error, "Unable to create file chooser intent")
+            fileChooserCallbacks.remove(requestId)?.onReceiveValue(null)
+            return true
+          }
+
+          return try {
+            startActivity(
+              Intent(this@FloatingBrowserService, FloatingFileChooserActivity::class.java)
+                .putExtra(FloatingFileChooserActivity.EXTRA_REQUEST_ID, requestId)
+                .putExtra(FloatingFileChooserActivity.EXTRA_CHOOSER_INTENT, chooserIntent)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+            true
+          } catch (error: Exception) {
+            Timber.e(error, "Unable to launch file chooser")
+            fileChooserCallbacks.remove(requestId)?.onReceiveValue(null)
+            true
+          }
+        }
       }
+
+      setDownloadListener { downloadUrl, userAgent, contentDisposition, mimeType, _ ->
+        enqueueDownload(downloadUrl, userAgent, contentDisposition, mimeType)
+      }
+    }
+  }
+
+  private fun enqueueDownload(
+    url: String?,
+    userAgent: String?,
+    contentDisposition: String?,
+    mimeType: String?
+  ) {
+    if (url.isNullOrBlank()) return
+    if (!url.startsWith("http://") && !url.startsWith("https://")) {
+      Timber.w("Unsupported floating download URL: %s", url)
+      return
+    }
+
+    try {
+      val fileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
+      val request = DownloadManager.Request(Uri.parse(url)).apply {
+        setTitle(fileName)
+        setDescription("Downloading from Lynket Float")
+        setNotificationVisibility(
+          DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
+        )
+        if (!mimeType.isNullOrBlank()) setMimeType(mimeType)
+        if (!userAgent.isNullOrBlank()) addRequestHeader("User-Agent", userAgent)
+        CookieManager.getInstance().getCookie(url)?.let { cookie ->
+          if (cookie.isNotBlank()) addRequestHeader("Cookie", cookie)
+        }
+        addRequestHeader("Referer", url)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+          setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+        }
+      }
+      val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+      manager.enqueue(request)
+    } catch (error: Exception) {
+      Timber.e(error, "Floating browser download failed")
     }
   }
 
@@ -433,7 +563,12 @@ class FloatingBrowserService : Service() {
   @SuppressLint("ClickableViewAccessibility")
   private fun installOutsideFocusRelease(session: FloatingWindow) {
     session.root.setOnTouchListener { _, event ->
-      if (event.actionMasked == MotionEvent.ACTION_OUTSIDE && !session.minimized) {
+      val selectionActive =
+        (session.webView as? SelectionAwareWebView)?.selectionActionModeActive == true
+      if (event.actionMasked == MotionEvent.ACTION_OUTSIDE &&
+        !session.minimized &&
+        !selectionActive
+      ) {
         setWindowFocusable(session, false)
       }
       false
